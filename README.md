@@ -13,6 +13,8 @@ Scripts for molecular dynamics analysis, machine learning on MD data, GROMACS pl
 | [kl_divergence_bootstrapping](molecular_dynamics/kl_divergence_bootstrapping/) | Python | KL divergence with bootstrapped confidence intervals between two MD ensembles |
 | [muller_potential_2d](molecular_dynamics/muller_potential_2d/) | Python | Müller-Brown potential energy surface for 2D sampling benchmarks |
 | [pdb_standardizer](molecular_dynamics/pdb_standardizer/) | Python | Strict PDB formatter with field-level validation and logging |
+| [tica_calculation](molecular_dynamics/tica_calculation/) | Python | Compute time-lagged independent components (TICs) from MD trajectories |
+
 
 ## machine_learning/
 
