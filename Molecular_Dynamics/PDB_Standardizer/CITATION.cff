@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+title: "PDB Standardizer"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Jamali
+    given-names: Soheil
+year: 2026
+version: 1.0
+doi: ""
+repository-code: https://github.com/Soheilj71/programming/tree/main/Python/Molecular_Dynamics/PDB_Standardizer
