@@ -1,26 +1,27 @@
 """
-TICA Analysis — ATLAS trajectory entry point
----------------------------------------------
-Loads ATLAS MD trajectories (.xtc + .pdb), computes backbone phi/psi
-torsions with MDTraj, converts to sin/cos features, fits TICA, and
-saves results and plots.
+TICA Analysis for MD trajectories
+----------------------------------
+Loads MD trajectories, computes backbone phi/psi torsions with MDTraj,
+converts to sin/cos features, fits TICA, and saves results and plots.
 
 Usage:
-    python analysis/tica_analysis.py \\
-        --protein 1d3y_B \\
-        --data-dir data \\
-        --out-dir analysis/1d3y_B
+    # Single trajectory (any name, any format)
+    python tica_analysis.py \\
+        --pdb  ala2.pdb \\
+        --traj ala2.dcd \\
+        --out-dir results/ala2
 
-    # Use only replicate R1:
-    python analysis/tica_analysis.py --protein 1d3y_B --data-dir data --replicates 1
-
-    # Custom lag time and dimensionality:
-    python analysis/tica_analysis.py --protein 1d3y_B --data-dir data --lagtime 50 --dim 4
+    # Multiple replicates
+    python tica_analysis.py \\
+        --pdb  protein.pdb \\
+        --traj R1.xtc R2.xtc R3.xtc \\
+        --lagtime 50 --dim 4 \\
+        --out-dir results/protein
 
 Outputs (written to --out-dir):
-    phi_psi.npy                  (n_replicates, T, 2) raw phi/psi in degrees
+    phi_psi.npy                  (n_trajs, T, 2) raw phi/psi in degrees
     tica_coords.npy              (M, dim) TIC coordinates, all frames concatenated
-    tica_coords_per_traj.npy     object array of (T, dim) arrays, one per replicate
+    tica_coords_per_traj.npy     object array of (T, dim) arrays, one per trajectory
     tica_model.npz               TICA model parameters (reusable for new data)
     tica_fes.png                 free energy surface in TIC1/TIC2
     tica_implied_timescales.png  slowest timescales vs lag time
@@ -50,27 +51,24 @@ except ImportError:
 # Trajectory loading
 # ---------------------------------------------------------------------------
 
-def load_atlas_replicates(protein: str, data_dir: str, replicates: list[int], traj_ext: str = "xtc") -> list[mdtraj.Trajectory]:
-    """Load one or more ATLAS replicate trajectories for a protein."""
-    base = os.path.join(data_dir, protein, protein)
-    pdb_path = f"{base}.pdb"
-    if not os.path.exists(pdb_path):
-        sys.exit(f"PDB not found: {pdb_path}")
+def load_trajectories(pdb: str, traj_files: list[str]) -> list[mdtraj.Trajectory]:
+    """Load one or more trajectory files using the given PDB as topology."""
+    if not os.path.exists(pdb):
+        sys.exit(f"PDB not found: {pdb}")
 
     trajs = []
-    for r in replicates:
-        xtc_path = f"{base}_prod_R{r}_fit.{traj_ext}"
-        if not os.path.exists(xtc_path):
-            print(f"Warning: replicate R{r} not found, skipping ({xtc_path})")
+    for traj_path in traj_files:
+        if not os.path.exists(traj_path):
+            print(f"Warning: trajectory not found, skipping: {traj_path}")
             continue
-        print(f"Loading replicate R{r} …")
-        traj = mdtraj.load(xtc_path, top=pdb_path)
+        print(f"Loading {traj_path} …")
+        traj = mdtraj.load(traj_path, top=pdb)
         traj = traj.atom_slice(traj.top.select("backbone"))
-        print(f"  R{r}: {traj.n_frames} frames, {traj.n_residues} residues")
+        print(f"  {traj.n_frames} frames, {traj.n_residues} residues")
         trajs.append(traj)
 
     if not trajs:
-        sys.exit("No replicate trajectories could be loaded.")
+        sys.exit("No trajectory files could be loaded.")
     return trajs
 
 
@@ -85,7 +83,6 @@ def compute_phi_psi(trajs: list[mdtraj.Trajectory]) -> list[np.ndarray]:
         _, phi = mdtraj.compute_phi(traj)   # (T, n_phi)
         _, psi = mdtraj.compute_psi(traj)   # (T, n_psi)
 
-        # Average over residues to get one phi and one psi per frame
         phi_mean = np.nanmean(np.rad2deg(phi), axis=1)   # (T,)
         psi_mean = np.nanmean(np.rad2deg(psi), axis=1)   # (T,)
 
@@ -140,21 +137,21 @@ def fes_from_coords(coords: np.ndarray, bins: int):
     return F, xc, yc
 
 
-def plot_fes(coords: np.ndarray, bins: int, lagtime: int, protein: str, outpath: str):
+def plot_fes(coords: np.ndarray, bins: int, lagtime: int, title: str, outpath: str):
     F, xc, yc = fes_from_coords(coords, bins)
     fig, ax = plt.subplots(figsize=(6, 5))
     cf = ax.contourf(xc, yc, F.T, levels=20, cmap="RdYlBu_r")
     ax.set_xlabel("TIC 1", fontsize=12)
     ax.set_ylabel("TIC 2", fontsize=12)
-    ax.set_title(f"{protein} — TICA Free Energy Surface (lag={lagtime})", fontsize=12, fontweight="bold")
+    ax.set_title(f"{title} — TICA Free Energy Surface (lag={lagtime})", fontsize=12, fontweight="bold")
     plt.colorbar(cf, ax=ax, label="Free energy (kT)")
     plt.tight_layout()
     plt.savefig(outpath, dpi=150)
-    plt.close()
+    plt.close(fig)
     print(f"Saved: {outpath}")
 
 
-def plot_implied_timescales(feat_trajs: list[np.ndarray], lags: list[int], dim: int, protein: str, outpath: str):
+def plot_implied_timescales(feat_trajs: list[np.ndarray], lags: list[int], dim: int, title: str, outpath: str):
     timescales = []
     for lag in lags:
         try:
@@ -166,19 +163,19 @@ def plot_implied_timescales(feat_trajs: list[np.ndarray], lags: list[int], dim: 
 
     timescales = np.array(timescales)
     fig, ax = plt.subplots(figsize=(7, 4))
-    colors = plt.cm.tab10(np.linspace(0, 0.5, dim))
+    colors = plt.colormaps["tab10"](np.linspace(0, 0.5, dim))
     for i in range(dim):
         ax.plot(lags, timescales[:, i], "o-", color=colors[i], label=f"TIC {i + 1}")
     ax.plot(lags, lags, "k--", lw=1, label="lag time (diagonal)")
     ax.set_xlabel("Lag time (frames)", fontsize=12)
     ax.set_ylabel("Implied timescale (frames)", fontsize=12)
-    ax.set_title(f"{protein} — Implied Timescales", fontsize=12)
+    ax.set_title(f"{title} — Implied Timescales", fontsize=12)
     ax.legend()
     ax.set_yscale("log")
     ax.set_xscale("log")
     plt.tight_layout()
     plt.savefig(outpath, dpi=150)
-    plt.close()
+    plt.close(fig)
     print(f"Saved: {outpath}")
 
 
@@ -188,33 +185,29 @@ def plot_implied_timescales(feat_trajs: list[np.ndarray], lags: list[int], dim: 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--protein",    required=True,          help="Protein name, e.g. 1d3y_B")
-    p.add_argument("--data-dir",   default="data",         help="Root data directory (default: data)")
-    p.add_argument("--replicates", default="1,2,3",        help="Comma-separated replicate indices (default: 1,2,3)")
-    p.add_argument("--traj-ext",   default="xtc",          help="Trajectory file extension: xtc, dcd, trr, nc (default: xtc)")
-    p.add_argument("--lagtime",    type=int, default=10,   help="TICA lag time in frames (default: 10)")
-    p.add_argument("--dim",        type=int, default=2,    help="Number of TIC components (default: 2)")
-    p.add_argument("--subsample",  type=int, default=500_000, help="Max frames for TICA fitting (default: 500000)")
-    p.add_argument("--bins",       type=int, default=100,  help="Histogram bins for FES plot (default: 100)")
-    p.add_argument("--its-lags",   default="1,2,5,10,20,50,100,150,200",
+    p.add_argument("--pdb",       required=True,              help="Topology PDB file (any path/name)")
+    p.add_argument("--traj",      required=True, nargs="+",   help="Trajectory file(s): xtc, dcd, trr, nc, … Multiple files = replicates")
+    p.add_argument("--lagtime",   type=int, default=10,       help="TICA lag time in frames (default: 10)")
+    p.add_argument("--dim",       type=int, default=2,        help="Number of TIC components (default: 2)")
+    p.add_argument("--subsample", type=int, default=500_000,  help="Max frames for TICA fitting (default: 500000)")
+    p.add_argument("--bins",      type=int, default=100,      help="Histogram bins for FES plot (default: 100)")
+    p.add_argument("--its-lags",  default="1,2,5,10,20,50,100,150,200",
                    help="Lag times for implied-timescales scan (default: 1,2,5,10,20,50,100,150,200)")
-    p.add_argument("--out-dir",    default=None,
-                   help="Output directory (default: analysis/<protein>)")
-    p.add_argument("--skip-its",   action="store_true",    help="Skip implied-timescales scan")
+    p.add_argument("--out-dir",   default="tica_output",      help="Output directory (default: tica_output)")
+    p.add_argument("--title",     default=None,               help="Title for plots (default: PDB filename)")
+    p.add_argument("--skip-its",  action="store_true",        help="Skip implied-timescales scan")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
 
-    out_dir = args.out_dir or os.path.join("analysis", args.protein)
-    os.makedirs(out_dir, exist_ok=True)
-
-    replicates = [int(r) for r in args.replicates.split(",")]
+    title = args.title or os.path.splitext(os.path.basename(args.pdb))[0]
+    os.makedirs(args.out_dir, exist_ok=True)
 
     # --- load ---
-    print(f"\n=== {args.protein} ===")
-    trajs = load_atlas_replicates(args.protein, args.data_dir, replicates, args.traj_ext)
+    print(f"\n=== {title} ===")
+    trajs = load_trajectories(args.pdb, args.traj)
 
     # --- featurize ---
     print("\nComputing phi/psi torsions …")
@@ -223,7 +216,7 @@ def main():
     print(f"Total frames after filtering: {total_frames:,}")
 
     phi_psi_arr = np.array(phi_psi_list, dtype=object)
-    phi_psi_path = os.path.join(out_dir, "phi_psi.npy")
+    phi_psi_path = os.path.join(args.out_dir, "phi_psi.npy")
     np.save(phi_psi_path, phi_psi_arr, allow_pickle=True)
     print(f"Saved: {phi_psi_path}")
 
@@ -239,15 +232,15 @@ def main():
     print(f"TIC coordinates shape: {tic_all.shape}")
 
     # --- save arrays ---
-    coords_path = os.path.join(out_dir, "tica_coords.npy")
+    coords_path = os.path.join(args.out_dir, "tica_coords.npy")
     np.save(coords_path, tic_all)
     print(f"Saved: {coords_path}")
 
-    per_traj_path = os.path.join(out_dir, "tica_coords_per_traj.npy")
+    per_traj_path = os.path.join(args.out_dir, "tica_coords_per_traj.npy")
     np.save(per_traj_path, np.array(tic_per_traj, dtype=object), allow_pickle=True)
     print(f"Saved: {per_traj_path}")
 
-    model_path = os.path.join(out_dir, "tica_model.npz")
+    model_path = os.path.join(args.out_dir, "tica_model.npz")
     np.savez(model_path,
              singular_vectors_left=model.singular_vectors_left,
              singular_values=model.singular_values,
@@ -257,14 +250,14 @@ def main():
     print(f"Saved: {model_path}")
 
     # --- plots ---
-    plot_fes(tic_all, args.bins, args.lagtime, args.protein,
-             os.path.join(out_dir, "tica_fes.png"))
+    plot_fes(tic_all, args.bins, args.lagtime, title,
+             os.path.join(args.out_dir, "tica_fes.png"))
 
     if not args.skip_its:
         its_lags = [int(x) for x in args.its_lags.split(",")]
         print("\nComputing implied timescales …")
-        plot_implied_timescales(feat_trajs, its_lags, args.dim, args.protein,
-                                os.path.join(out_dir, "tica_implied_timescales.png"))
+        plot_implied_timescales(feat_trajs, its_lags, args.dim, title,
+                                os.path.join(args.out_dir, "tica_implied_timescales.png"))
 
     # --- summary ---
     print("\n-- TIC 1 statistics --")
