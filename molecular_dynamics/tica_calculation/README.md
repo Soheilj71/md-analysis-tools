@@ -45,49 +45,42 @@ pip install deeptime numpy matplotlib
 
 ## Quick start
 
-### Alanine dipeptide (or any small peptide) — φ/ψ torsions
+### Alanine dipeptide — XTC trajectory
 
 ```bash
-python tica_general.py \
-    --pdb  protein.pdb \
-    --traj traj_R1.xtc traj_R2.xtc traj_R3.xtc \
-    --feature phi_psi \
+python tica_analysis.py \
+    --protein ala2 \
+    --data-dir data \
+    --replicates 1 \
     --lagtime 10 \
-    --dim 4 \
-    --out-dir results/
+    --dim 2 \
+    --out-dir results/ala2
 ```
 
-### Larger protein — Cα distances, 6 TICs, custom lag
+### Alanine dipeptide — DCD trajectory (CHARMM/NAMD)
 
 ```bash
-python tica_general.py \
-    --pdb  1abc.pdb \
-    --traj production.xtc \
-    --feature ca_distances \
+python tica_analysis.py \
+    --protein ala2 \
+    --data-dir data \
+    --replicates 1 \
+    --traj-ext dcd \
+    --lagtime 10 \
+    --dim 2 \
+    --out-dir results/ala2
+```
+
+### Larger protein — multiple replicates, custom lag
+
+```bash
+python tica_analysis.py \
+    --protein 1d3y_B \
+    --data-dir data \
+    --replicates 1,2,3 \
     --lagtime 50 \
-    --dim 6 \
+    --dim 4 \
     --its-lags 5,10,20,50,100,200,500 \
-    --out-dir results_1abc/
-```
-
-### Pre-computed feature array (skip trajectory loading)
-
-```bash
-python tica_general.py \
-    --feature custom \
-    --feature-file my_features.npy \
-    --lagtime 20 \
-    --dim 4
-```
-
-### All backbone dihedrals (φ, ψ, ω) — richer representation
-
-```bash
-python tica_general.py \
-    --pdb protein.pdb \
-    --traj traj.xtc \
-    --feature backbone \
-    --dim 6
+    --out-dir results/1d3y_B
 ```
 
 ---
@@ -96,15 +89,14 @@ python tica_general.py \
 
 ```
 Input:
-  --pdb FILE              Topology PDB file
-  --traj FILE [FILE ...]  Trajectory file(s) — multiple files = replicates
-  --feature {phi_psi, backbone, ca_distances, custom}
-                          Featurization type (default: phi_psi)
-  --feature-file FILE     .npy file for --feature custom
+  --protein STR           Protein name (must match data directory name)
+  --data-dir DIR          Root data directory (default: data)
+  --replicates INT,...    Comma-separated replicate indices (default: 1,2,3)
+  --traj-ext STR          Trajectory format extension: xtc, dcd, trr, nc (default: xtc)
 
 TICA parameters:
   --lagtime INT           Lag time in frames (default: 10)
-  --dim INT               Number of TIC components (default: 4)
+  --dim INT               Number of TIC components (default: 2)
   --subsample INT         Max frames for fitting (default: 500,000)
 
 Implied-timescales scan:
@@ -112,11 +104,8 @@ Implied-timescales scan:
   --skip-its              Skip the scan (faster, no quality info)
 
 Output:
-  --out-dir DIR           Output directory (default: tica_output/)
-  --title STR             Title string on all plots
+  --out-dir DIR           Output directory (default: analysis/<protein>)
   --bins INT              Bins for FES histogram (default: 100)
-  --fes-pairs I,J[;I,J]   TIC pairs for FES plots, 0-based (default: 0,1)
-  --no-projections        Skip 1-D projection histograms
 ```
 
 ---

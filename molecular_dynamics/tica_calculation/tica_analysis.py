@@ -50,7 +50,7 @@ except ImportError:
 # Trajectory loading
 # ---------------------------------------------------------------------------
 
-def load_atlas_replicates(protein: str, data_dir: str, replicates: list[int]) -> list[mdtraj.Trajectory]:
+def load_atlas_replicates(protein: str, data_dir: str, replicates: list[int], traj_ext: str = "xtc") -> list[mdtraj.Trajectory]:
     """Load one or more ATLAS replicate trajectories for a protein."""
     base = os.path.join(data_dir, protein, protein)
     pdb_path = f"{base}.pdb"
@@ -59,7 +59,7 @@ def load_atlas_replicates(protein: str, data_dir: str, replicates: list[int]) ->
 
     trajs = []
     for r in replicates:
-        xtc_path = f"{base}_prod_R{r}_fit.xtc"
+        xtc_path = f"{base}_prod_R{r}_fit.{traj_ext}"
         if not os.path.exists(xtc_path):
             print(f"Warning: replicate R{r} not found, skipping ({xtc_path})")
             continue
@@ -191,6 +191,7 @@ def parse_args():
     p.add_argument("--protein",    required=True,          help="Protein name, e.g. 1d3y_B")
     p.add_argument("--data-dir",   default="data",         help="Root data directory (default: data)")
     p.add_argument("--replicates", default="1,2,3",        help="Comma-separated replicate indices (default: 1,2,3)")
+    p.add_argument("--traj-ext",   default="xtc",          help="Trajectory file extension: xtc, dcd, trr, nc (default: xtc)")
     p.add_argument("--lagtime",    type=int, default=10,   help="TICA lag time in frames (default: 10)")
     p.add_argument("--dim",        type=int, default=2,    help="Number of TIC components (default: 2)")
     p.add_argument("--subsample",  type=int, default=500_000, help="Max frames for TICA fitting (default: 500000)")
@@ -213,7 +214,7 @@ def main():
 
     # --- load ---
     print(f"\n=== {args.protein} ===")
-    trajs = load_atlas_replicates(args.protein, args.data_dir, replicates)
+    trajs = load_atlas_replicates(args.protein, args.data_dir, replicates, args.traj_ext)
 
     # --- featurize ---
     print("\nComputing phi/psi torsions …")
