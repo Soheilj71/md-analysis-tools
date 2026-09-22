@@ -1,0 +1,6 @@
+MDAnalysis
+numpy
+matplotlib
+scipy
+torch
+pytorch-lightning
