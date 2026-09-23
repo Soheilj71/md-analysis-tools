@@ -23,6 +23,7 @@ Scripts for molecular dynamics analysis, machine learning on MD data, GROMACS pl
 | [find_best_checkpoint](machine_learning/find_best_checkpoint/) | Python | Scans PyTorch Lightning `metrics.csv` logs and symlinks the best checkpoint |
 | [kl_divergence](machine_learning/kl_divergence/) | Python | 2D KL divergence between two datasets using kernel density estimation |
 | [kl_divergence_bootstrapping](machine_learning/kl_divergence_bootstrapping/) | Python | KL divergence with bootstrapped confidence intervals |
+| [Bootstrapping](machine_learning/Bootstrapping/) | Python | Bootstrapping utility for computing confidence intervals on arbitrary metrics |
 
 ## plotting/
 
