@@ -1,351 +1,117 @@
-# 2D Free Energy Surface from Point Data
+# heatmap.py
 
-A simple Python script to compute a **2D free energy surface (FES)** from sampled 2D data stored in a NumPy file (`.npy`).
-
-This tool:
-
-- loads 2D points from a NumPy file
-- builds a 2D histogram
-- converts the probability distribution into a free energy surface
-- shifts the minimum free energy to zero
-- saves both the numerical grid and a plotted image
-
-It is useful for people working with:
-
-- molecular dynamics
-- reduced-dimensional trajectories
-- latent-space analysis
-- reaction coordinates
-- probability-to-free-energy conversion
+A general-purpose command-line tool for generating 2-D density heatmaps from NumPy `.npy` files.  
+Drop in any array — point clouds, trajectories, or image grids — and get a publication-quality figure with one command.
 
 ---
 
-## What this script does
+## Features
 
-The script reads 2D sampled points and estimates the probability distribution \( P(x, y) \) using a 2D histogram.
-
-It then converts the probability into free energy using:
-
-
-$$
-F(x, y) = -kT \ln P(x, y)
-$$
-
-Finally, it shifts the surface so that the minimum free energy is zero:
-
-$$
-F_{\text{shifted}}(x, y) = F(x, y) - \min(F)
-$$
-
-This is a common convention in scientific plotting because it makes the lowest-energy region equal to 0.
+- **Zero configuration required** — shape is detected automatically
+- Three plot styles: **hexbin**, **hist2d**, and **imshow**
+- Handles 6 array shapes out of the box (see below)
+- Logarithmic density scale via `--log`
+- Fully configurable: colormap, bins, axis labels, limits, figure size, DPI, output path
+- Output filename defaults to `<input_stem>_heatmap.png` next to the input file
 
 ---
 
-## Input format
+## Requirements
 
-The script accepts a NumPy `.npy` file in one of these shapes:
-
-### 1. Flat 2D point array
-```python
-(N, 2)
 ```
-Example:
-* `N` rows
-* 2 columns
-* first column = `x`
-* second column = `y`
-
-### 2. Trajectory-style array
-```python
-(n_traj, n_steps, 2)
+numpy
+matplotlib
 ```
 
-Example:
-* multiple trajectories
-* multiple time steps per trajectory
-* 2 coordinates per point
-The script automatically flattens this into shape `(N, 2)` before processing.
+Install with:
 
-# Output files
-If you use:
-```bash
---out_prefix results/fes_output
-```
-
-the script saves:
-
-## 1. Numerical grid
-```bash
-results/fes_output.npz
-```
-
-This compressed NumPy file contains:
-* `F` → free energy grid
-* `P` → probability grid
-* `xcenters` → x bin centers
-* `ycenters` → y bin centers
-* `xedges` → x bin edges
-* `yedges` → y bin edges
-* `meta` → metadata such as number of bins, epsilon, kT, and input filename
-  
-## 2. Plot image
-```bash
-results/fes_output.png
-```
-
-This is a heatmap of the 2D free energy surface.
-
-# Requirements
-## Python
-*  Python 3.8 or newer is recommended
-
-## Required package
-*  `numpy`
-
-## Optional package
-*  `matplotlib`
-   Only needed if you want the PNG plot.
-
-Install dependencies with:
 ```bash
 pip install numpy matplotlib
 ```
 
-If `matplotlib` is not installed, the script will still save the `.npz` file, but it will skip the PNG plot.
+---
 
-# Usage
-
-Basic usage:
+## Usage
 
 ```bash
-python fes_2d_from_points.py --in points.npy --out_prefix output/fes
+python heatmap.py <input.npy> [options]
 ```
 
-Example with custom number of bins and thermal energy:
-```bsah
-python fes_2d_from_points.py \
-  --in points.npy \
-  --out_prefix output/fes \
-  --bins 100 \
-  --kT 1.0
-```
-
-Example with manual axis limits:
-```bash
-python fes_2d_from_points.py \
-  --in points.npy \
-  --out_prefix output/fes \
-  --xlim -3 3 \
-  --ylim -2 2
-```
-
-# Command-line arguments
-## Required arguments
-`--in`
-Path to the input `.npy` file.
-
-Example:
-```bash
---in data/points.npy
-```
-
-`--out_prefix`
-
-Prefix for output files.
-
-Example:
-```bash
---out_prefix results/fes_run1
-```
-
-This creates:
-*    `results/fes_run1.npz`
-*    `results/fes_run1.png`
-
-## Optional arguments
-`--bins`
-Number of histogram bins per dimension.
-Default:
-```bash
-80
-```
-
-Larger values give finer resolution, but may require more data for a stable surface.
-Example:
-```bash
---bins 120
-```
-
-```
---eps
-```
-
-A small number added to every histogram bin to avoid log(0).
-Default:
-```bash
-1e-12
-```
-
-This helps prevent numerical problems in low-probability regions.
-Example:
-```bash
---eps 1e-10
-```
-
-`--kT`
-
-Thermal energy factor used in the free energy equation.
-Default:
-```bash
-1.0
-```
-
-If `kT = 1`, the free energy is reported in reduced units.
-
-Example:
-```bash
---kT 0.593
-```
-
-`--xlim`
-
-Optional x-axis range as:
-```bash
---xlim xmin xmax
-```
-
-Example:
-```bash
---xlim -4 4
-```
-
-`--ylim`
-
-Optional y-axis range as:
-```bash
---ylim ymin ymax
-```
-
-Example:
-```bash
---ylim -3 3
-```
-
-# Example workflow
-## Example 1: Basic run
-```bash
-python fes_2d_from_points.py --in sample.npy --out_prefix results/fes
-```
-
-## Example 2: Higher-resolution histogram
-```bash
-python fes_2d_from_points.py --in sample.npy --out_prefix results/fes --bins 150
-```
-
-# Example 3: Fixed plotting region
-```bash
-python fes_2d_from_points.py \
-  --in sample.npy \
-  --out_prefix results/fes \
-  --xlim -2.5 2.5 \
-  --ylim -2.5 2.5
-```
-
-# How the method works
-
-The script follows these steps:
-1.  Load input points
-    *    reads a `.npy` file
-    *    accepts either `(N, 2)` or `(n_traj, n_steps, 2)`
-
-2.  Clean the data
-    *    removes rows containing `NaN` or `inf`
-
-3.  Choose the histogram range
-    *    uses user-defined `xlim` and `ylim` if provided
-    *    otherwise automatically chooses a range from the data with a small padding
-
-4.  Build a 2D histogram
-    *    counts how many points fall into each bin
-
-5.  Convert counts to probability
-    *    normalizes the histogram so all bins sum to 1
-
-6. Convert probability to free energy
-    *    uses:
-          $F = -kT \ln(P)$
-
-7.  Shift the minimum energy to zero
-    *    makes the lowest point of the surface equal to 0
-
-8.  Save results
-    *    stores the grid in `.npz`
-    *    saves a PNG plot if `matplotlib` is available
-
-# Notes and interpretation
-## Why add epsilon?
-
-Some bins may contain zero counts. Since:
-
-$$
-\ln(0)
-$$
-
-is undefined, the script adds a very small value (`eps`) to all bins before taking the logarithm.
-
-## Why shift the minimum to zero?
-
-Free energy surfaces are often shown relative to the lowest-energy state. This makes plots easier to interpret.
-
-## Why can the result be noisy?
-If you use:
-*    too few points
-*    too many bins
-*    poor sampling
-the estimated free energy surface may look rough or unstable.
-
-# Limitations
-*    This script assumes the input data already represents meaningful 2D coordinates.
-*    It uses simple histogram-based density estimation, not kernel density estimation.
-*    The free energy quality depends strongly on sampling quality and histogram settings.
-*    Very sparse data may produce unstable surfaces.
-*    The axis labels are generic (`x` and `y`) and may need editing for publication-quality figures.
-
-# Error handling
-The script stops with a clear error message if:
-*    The input file does not exist
-*    The input shape is not `(N, 2)` or `(n_traj, n_steps, 2)`
-*    Too few valid points remain after cleaning
-
-The script also warns if `matplotlib` is missing and skips the PNG plot in that case.
-
-# Example file structure
-```bash
-project/
-├── fes_2d_from_points.py
-├── data/
-│   └── points.npy
-└── results/
-```
-Run:
-```bash
-python fes_2d_from_points.py --in data/points.npy --out_prefix results/fes
-```
-
-Expected output:
+### Minimal examples
 
 ```bash
-results/fes.npz
-results/fes.png
+# Auto-detect shape, save train_x0_heatmap.png
+python heatmap.py train_x0.npy
+
+# Trajectory array (N, T, 1, 2) — flattened into a point cloud, log scale
+python heatmap.py synthetic_trajs.npy --kind hexbin --cmap viridis --log --gridsize 80
+
+# 2-D histogram, 120 bins per axis, logarithmic norm
+python heatmap.py train_x1.npy --kind hist2d --bins 120 --log
+
+# Wide array — choose which two columns to use as x and y
+python heatmap.py data.npy --xcol 2 --ycol 5
+
+# Custom title, axis labels, and output path
+python heatmap.py train_md_traj.npy \
+    --title "MD Trajectory Density" \
+    --xlabel "x (Å)" --ylabel "y (Å)" \
+    --output figures/md_density.png
+
+# 2-D grid array rendered with imshow
+python heatmap.py grid.npy --kind imshow --cmap inferno
 ```
 
-# Possible future improvements
-Some useful future extensions could include:
-*    contour plotting
-*    custom axis labels
-*    custom colormap selection
-*    support for CSV input
-*    support for kernel density estimation
-*    optional energy cutoff for visualization
-*    saving raw histogram counts separately
+---
 
+## Supported array shapes
+
+| Shape | Interpretation |
+|---|---|
+| `(N, 2)` | N 2-D points; columns are x and y |
+| `(N, D)` with D > 2 | Wide array; pick columns with `--xcol` / `--ycol` |
+| `(N, T, 2)` | Trajectory with T time-steps; all steps flattened |
+| `(N, T, 1, 2)` | Same with a singleton spatial dim (common in diffusion models) |
+| `(H, W)` | 2-D grid or image; rendered directly with `imshow` |
+| `(N,)` | 1-D array; plotted as index vs. value |
+
+---
+
+## All options
+
+| Flag | Default | Description |
+|---|---|---|
+| `input` | — | Path to the `.npy` file *(required)* |
+| `--kind` | `auto` | Plot type: `hexbin`, `hist2d`, `imshow`, or `auto` |
+| `--cmap` | `plasma` | Any [Matplotlib colormap](https://matplotlib.org/stable/gallery/color/colormap_reference.html) |
+| `--gridsize` | `100` | Hex-grid cell count (hexbin only) |
+| `--bins` | `100` | Bins per axis (hist2d only) |
+| `--log` | off | Use logarithmic density scale |
+| `--no-colorbar` | off | Hide the colorbar |
+| `--title` | filename | Figure title |
+| `--xlabel` | — | X-axis label |
+| `--ylabel` | — | Y-axis label |
+| `--xlim MIN MAX` | — | X-axis limits |
+| `--ylim MIN MAX` | — | Y-axis limits |
+| `--xcol` | `0` | Column index for x (wide arrays) |
+| `--ycol` | `1` | Column index for y (wide arrays) |
+| `--figsize W H` | `6 5` | Figure size in inches |
+| `--dpi` | `150` | Output resolution |
+| `-o / --output` | `<stem>_heatmap.png` | Output file path |
+
+---
+
+## Example outputs
+
+| Input | Command | Result |
+|---|---|---|
+| `train_x0.npy` `(14996, 2)` | `python heatmap.py train_x0.npy` | hexbin, plasma |
+| `train_x1.npy` `(14996, 2)` | `... --kind hist2d --log` | hist2d, log norm |
+| `synthetic_trajs.npy` `(10, 10, 501, 2)` | `... --log --gridsize 80` | 100 200 time-steps flattened |
+| `train_md_traj.npy` `(15001, 2)` | `... --title "MD density"` | hexbin, custom title |
+
+---
+
+## License
+
+MIT

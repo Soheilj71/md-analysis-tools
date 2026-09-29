@@ -1,167 +1,223 @@
-#!/usr/bin/env python3
-# fes_2d_from_points.py
-# Goal:
-#   - Load 2D points from .npy (shape (N,2) or (n_traj,n_steps,2))
-#   - Build a 2D histogram probability P(x,y)
-#   - Convert to free energy: F(x,y) = -kT * ln(P)
-#   - Shift so minimum free energy is 0 (common in papers)
-#   - Save the grid (npz) and a plot (png)
+"""
+heatmap.py — General-purpose 2-D density heatmap for NumPy arrays.
+
+Supported array shapes
+----------------------
+(N, 2)               — N points, columns are x / y
+(N, D) with D > 2    — pick two columns with --xcol / --ycol  (default 0, 1)
+(N, T, 2)            — trajectory: flatten all time-steps into one point cloud
+(N, T, 1, 2)         — same with an extra singleton dim (e.g. Dr. Chen's format)
+(H, W)               — 2-D grid / image: rendered directly with imshow
+(N,)                 — 1-D array: plotted as a histogram (row index vs value)
+
+Usage examples
+--------------
+# quickest call — auto-detects shape, saves heatmap.png next to the .npy file
+python heatmap.py train_x0.npy
+
+# trajectory array, log-density, plasma colourmap, 80-cell grid
+python heatmap.py synthetic_trajs.npy --kind hexbin --cmap plasma --log --gridsize 80
+
+# 2-D point cloud, histogram style, custom output
+python heatmap.py train_x1.npy --kind hist2d --bins 120 --output out.png --title "X1 density"
+
+# pick specific columns from a wide array
+python heatmap.py data.npy --xcol 2 --ycol 5
+
+# 2-D grid array rendered as an image
+python heatmap.py grid.npy --kind imshow --cmap viridis
+"""
 
 import argparse
+import os
 import sys
-from pathlib import Path
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 import numpy as np
 
-# Matplotlib is used only for plotting.
-try:
-    import matplotlib.pyplot as plt
-except Exception:
-    plt = None
 
+# ---------------------------------------------------------------------------
+# Shape normalisation
+# ---------------------------------------------------------------------------
 
-def fail(message: str, code: int = 1) -> None:
-    print(f"[ERROR] {message}", file=sys.stderr)
-    sys.exit(code)
+def extract_xy(arr: np.ndarray, xcol: int, ycol: int):
+    """
+    Return (x, y, mode) where mode is 'scatter' or 'grid'.
 
-
-def load_points(path: Path) -> np.ndarray:
-    if not path.exists():
-        fail(f"Input file not found: {path}")
-
-    arr = np.load(str(path))
+    'scatter' → x and y are flat 1-D arrays of equal length, ready for hexbin/hist2d.
+    'grid'    → arr is returned as-is for imshow.
+    """
     arr = np.asarray(arr, dtype=float)
+    ndim = arr.ndim
 
-    # Accept (N,2) directly.
-    if arr.ndim == 2 and arr.shape[1] == 2:
-        pts = arr
+    # ---- 2-D grid (H × W) --------------------------------------------------
+    if ndim == 2 and arr.shape[1] != 2:
+        # Likely a grid image, not a point cloud
+        return arr, None, "grid"
 
-    # Accept (n_traj, n_steps, 2) and flatten into (N,2).
-    elif arr.ndim == 3 and arr.shape[-1] == 2:
-        pts = arr.reshape(-1, 2)
+    # ---- 1-D array ---------------------------------------------------------
+    if ndim == 1:
+        return np.arange(len(arr), dtype=float), arr.flatten(), "scatter"
 
-    else:
-        fail(f"Expected shape (N,2) or (n_traj,n_steps,2). Got: {arr.shape}")
+    # ---- (N, 2) point cloud ------------------------------------------------
+    if ndim == 2 and arr.shape[1] == 2:
+        return arr[:, 0], arr[:, 1], "scatter"
 
-    # Remove bad numeric rows (NaN/inf).
-    good = np.isfinite(pts).all(axis=1)
-    pts = pts[good]
+    # ---- (N, D) wide array with D > 2 -------------------------------------
+    if ndim == 2 and arr.shape[1] > 2:
+        return arr[:, xcol], arr[:, ycol], "scatter"
 
-    if pts.shape[0] < 50:
-        fail(f"Too few valid points after cleaning ({pts.shape[0]}). Need more for a stable FES.")
+    # ---- (N, T, 2) trajectory ----------------------------------------------
+    if ndim == 3 and arr.shape[-1] == 2:
+        flat = arr.reshape(-1, 2)
+        return flat[:, 0], flat[:, 1], "scatter"
 
-    return pts
+    # ---- (N, T, 1, 2) trajectory (Dr. Chen / i2sb format) -----------------
+    if ndim == 4 and arr.shape[-1] == 2:
+        flat = arr.reshape(-1, 2)
+        return flat[:, 0], flat[:, 1], "scatter"
 
+    # ---- fallback: treat last two dims as x / y ----------------------------
+    flat = arr.reshape(-1, arr.shape[-1])
+    if flat.shape[1] >= max(xcol, ycol) + 1:
+        return flat[:, xcol], flat[:, ycol], "scatter"
 
-def pick_range(points: np.ndarray, xlim, ylim, pad_frac: float = 0.05):
-    # If user provided xlim/ylim, use them.
-    if xlim is not None and ylim is not None:
-        return (xlim[0], xlim[1], ylim[0], ylim[1])
-
-    # Otherwise choose range from data, with a small padding.
-    xmin = float(points[:, 0].min())
-    xmax = float(points[:, 0].max())
-    ymin = float(points[:, 1].min())
-    ymax = float(points[:, 1].max())
-
-    xpad = (xmax - xmin) * pad_frac if xmax > xmin else 1.0
-    ypad = (ymax - ymin) * pad_frac if ymax > ymin else 1.0
-
-    return (xmin - xpad, xmax + xpad, ymin - ypad, ymax + ypad)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Compute a 2D free-energy surface (FES) from 2D samples stored in .npy.")
-    parser.add_argument("--in", dest="infile", required=True, help="Input .npy file containing 2D points.")
-    parser.add_argument("--out_prefix", required=True, help="Output prefix (saves <prefix>.npz and <prefix>.png).")
-
-    parser.add_argument("--bins", type=int, default=80, help="Histogram bins per dimension (default: 80).")
-    parser.add_argument("--eps", type=float, default=1e-12, help="Small smoothing value to avoid log(0) (default: 1e-12).")
-
-    parser.add_argument("--kT", type=float, default=1.0, help="Thermal energy scale (default: 1.0).")
-    parser.add_argument("--xlim", type=float, nargs=2, default=None, help="Optional x-axis range: xmin xmax.")
-    parser.add_argument("--ylim", type=float, nargs=2, default=None, help="Optional y-axis range: ymin ymax.")
-
-    args = parser.parse_args()
-
-    infile = Path(args.infile)
-    out_prefix = Path(args.out_prefix)
-
-    pts = load_points(infile)
-
-    # Decide histogram range.
-    rng = pick_range(pts, args.xlim, args.ylim)
-    xmin, xmax, ymin, ymax = rng
-
-    # 2D histogram of counts.
-    counts, xedges, yedges = np.histogram2d(
-        pts[:, 0],
-        pts[:, 1],
-        bins=args.bins,
-        range=[[xmin, xmax], [ymin, ymax]],
-        density=False,
+    raise ValueError(
+        f"Cannot extract x/y from array with shape {arr.shape}. "
+        "Try specifying --xcol and --ycol explicitly."
     )
 
-    # Add epsilon so no bin is exactly zero (avoids log(0)).
-    counts = counts + args.eps
 
-    # Convert counts to probability P(x,y) by dividing by total counts.
-    P = counts / counts.sum()
+# ---------------------------------------------------------------------------
+# Plot helpers
+# ---------------------------------------------------------------------------
 
-    # Free energy in "kT units" if kT=1:
-    # F = -kT * ln(P)
-    F = -float(args.kT) * np.log(P)
+def plot_hexbin(ax, x, y, gridsize, cmap, log, colorbar):
+    scale = "log" if log else None
+    hb = ax.hexbin(x, y, gridsize=gridsize, cmap=cmap, bins=scale)
+    if colorbar:
+        cb = plt.colorbar(hb, ax=ax)
+        cb.set_label("log(count)" if log else "count")
+    return hb
 
-    # Shift so minimum is 0 (common plotting convention).
-    F = F - F.min()
 
-    # Compute bin centers for x and y (useful for plotting / saving).
-    xcenters = 0.5 * (xedges[:-1] + xedges[1:])
-    ycenters = 0.5 * (yedges[:-1] + yedges[1:])
+def plot_hist2d(ax, x, y, bins, cmap, log, colorbar):
+    norm = LogNorm() if log else None
+    _, _, _, img = ax.hist2d(x, y, bins=bins, cmap=cmap, norm=norm)
+    if colorbar:
+        cb = plt.colorbar(img, ax=ax)
+        cb.set_label("log(count)" if log else "count")
+    return img
 
-    # Save raw grid data for later reuse.
-    out_npz = out_prefix.with_suffix(".npz")
-    out_npz.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        str(out_npz),
-        F=F,
-        P=P,
-        xcenters=xcenters,
-        ycenters=ycenters,
-        xedges=xedges,
-        yedges=yedges,
-        meta=dict(bins=args.bins, eps=args.eps, kT=args.kT, infile=str(infile)),
+
+def plot_imshow(ax, grid, cmap, log, colorbar):
+    data = np.log1p(grid) if log else grid
+    im = ax.imshow(data, cmap=cmap, origin="lower", aspect="auto")
+    if colorbar:
+        cb = plt.colorbar(im, ax=ax)
+        cb.set_label("log(1 + value)" if log else "value")
+    return im
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        description="Generate a 2-D density heatmap from a .npy file.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
     )
-    print(f"Saved grid data: {out_npz}")
-
-    # Plot and save an image if matplotlib is available.
-    out_png = out_prefix.with_suffix(".png")
-    if plt is None:
-        print("[WARN] matplotlib not installed, skipping PNG plot. Install matplotlib to enable plotting.")
-        return
-
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-
-    # We plot F as an image.
-    # Important: histogram2d returns array indexed as [x_bin, y_bin], so we transpose for correct orientation.
-    im = ax.imshow(
-        F.T,
-        origin="lower",
-        extent=[xmin, xmax, ymin, ymax],
-        aspect="auto",
+    p.add_argument("input", help="Path to the .npy file.")
+    p.add_argument(
+        "--kind",
+        choices=["hexbin", "hist2d", "imshow", "auto"],
+        default="auto",
+        help=(
+            "Plot type. 'auto' picks hexbin for scatter data and imshow for 2-D grids "
+            "(default: auto)."
+        ),
     )
+    p.add_argument("--cmap", default="plasma", help="Matplotlib colourmap (default: plasma).")
+    p.add_argument("--gridsize", type=int, default=100, help="Hex grid resolution (default: 100).")
+    p.add_argument("--bins", type=int, default=100, help="Histogram bin count per axis (default: 100).")
+    p.add_argument("--log", action="store_true", help="Use logarithmic density scale.")
+    p.add_argument("--no-colorbar", dest="colorbar", action="store_false", help="Hide the colorbar.")
+    p.set_defaults(colorbar=True)
+    p.add_argument("--title", default=None, help="Figure title (default: input filename).")
+    p.add_argument("--xlabel", default=None, help="X-axis label.")
+    p.add_argument("--ylabel", default=None, help="Y-axis label.")
+    p.add_argument("--xlim", nargs=2, type=float, metavar=("MIN", "MAX"), help="X-axis limits.")
+    p.add_argument("--ylim", nargs=2, type=float, metavar=("MIN", "MAX"), help="Y-axis limits.")
+    p.add_argument("--xcol", type=int, default=0, help="Column index for x (wide arrays, default: 0).")
+    p.add_argument("--ycol", type=int, default=1, help="Column index for y (wide arrays, default: 1).")
+    p.add_argument("--figsize", nargs=2, type=float, metavar=("W", "H"), default=[6, 5], help="Figure size in inches (default: 6 5).")
+    p.add_argument("--dpi", type=int, default=150, help="Output DPI (default: 150).")
+    p.add_argument("--output", "-o", default=None, help="Output file path (default: <input_stem>_heatmap.png).")
+    return p
 
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_title("2D Free Energy Surface (shifted so min=0)")
 
-    fig.colorbar(im, ax=ax, label="Free energy (same units as kT)")
+def main():
+    args = build_parser().parse_args()
 
-    fig.tight_layout()
-    fig.savefig(str(out_png), dpi=200)
+    # Load ----------------------------------------------------------------
+    if not os.path.isfile(args.input):
+        sys.exit(f"Error: file not found — {args.input}")
+
+    arr = np.load(args.input)
+    print(f"Loaded {args.input}: shape={arr.shape}, dtype={arr.dtype}")
+
+    # Extract coordinates -------------------------------------------------
+    try:
+        x, y, mode = extract_xy(arr, args.xcol, args.ycol)
+    except ValueError as exc:
+        sys.exit(f"Error: {exc}")
+
+    # Resolve kind --------------------------------------------------------
+    kind = args.kind
+    if kind == "auto":
+        kind = "imshow" if mode == "grid" else "hexbin"
+
+    if mode == "grid" and kind in ("hexbin", "hist2d"):
+        print(f"Warning: array looks like a 2-D grid — switching kind to 'imshow'.")
+        kind = "imshow"
+
+    # Default output path -------------------------------------------------
+    output = args.output
+    if output is None:
+        stem = os.path.splitext(os.path.basename(args.input))[0]
+        output = os.path.join(os.path.dirname(args.input) or ".", f"{stem}_heatmap.png")
+
+    # Plot ----------------------------------------------------------------
+    fig, ax = plt.subplots(figsize=args.figsize)
+
+    if kind == "hexbin":
+        plot_hexbin(ax, x, y, args.gridsize, args.cmap, args.log, args.colorbar)
+    elif kind == "hist2d":
+        plot_hist2d(ax, x, y, args.bins, args.cmap, args.log, args.colorbar)
+    elif kind == "imshow":
+        plot_imshow(ax, arr if mode == "grid" else x.reshape(int(len(x)**0.5), -1),
+                    args.cmap, args.log, args.colorbar)
+
+    # Labels / limits / title ---------------------------------------------
+    title = args.title if args.title is not None else os.path.basename(args.input)
+    ax.set_title(title)
+
+    if args.xlabel:
+        ax.set_xlabel(args.xlabel)
+    if args.ylabel:
+        ax.set_ylabel(args.ylabel)
+    if args.xlim:
+        ax.set_xlim(args.xlim)
+    if args.ylim:
+        ax.set_ylim(args.ylim)
+
+    plt.tight_layout()
+    plt.savefig(output, dpi=args.dpi)
     plt.close(fig)
-
-    print(f"Saved plot: {out_png}")
+    print(f"Saved → {output}")
 
 
 if __name__ == "__main__":
